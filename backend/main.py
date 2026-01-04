@@ -142,24 +142,58 @@ async def chat(request: ChatRequest):
     try:
         # Query vector store with source filtering
         active_source_ids = request.active_file_ids if request.active_file_ids else None
+        
+        # Adjust number of results based on number of active sources
+        # More sources = more chunks needed, but limit to avoid context overflow
+        num_sources = len(active_source_ids) if active_source_ids else 0
+        n_results = min(3 + (num_sources * 2), 10) if num_sources > 0 else 5
+        
         results = vectorstore.query(
             query_text=request.message,
-            n_results=5,
+            n_results=n_results,
             active_source_ids=active_source_ids
         )
         
         # Extract context from results
         if results and results.get("documents") and results["documents"][0]:
             context_chunks = results["documents"][0]
-            context = "\n\n".join(context_chunks)
+            metadatas_list = results.get("metadatas", [[]])[0]
             
             # Get unique source IDs used
             sources_used = list(set([
                 meta["source_id"] 
-                for meta in results.get("metadatas", [[]])[0] 
+                for meta in metadatas_list 
                 if meta
             ]))
             source_names = [file_registry.get(sid, sid) for sid in sources_used]
+            
+            # Build context with better organization for multiple sources
+            # Group chunks by source for better structure
+            if len(sources_used) > 1:
+                # Multiple sources: organize by source
+                source_groups = {}
+                
+                for i, chunk in enumerate(context_chunks):
+                    if i < len(metadatas_list) and metadatas_list[i]:
+                        chunk_source = metadatas_list[i].get("source_id")
+                        source_name = file_registry.get(chunk_source, chunk_source)
+                        
+                        if chunk_source not in source_groups:
+                            source_groups[chunk_source] = []
+                        source_groups[chunk_source].append(chunk)
+                
+                # Build context with source labels
+                context_parts = []
+                for source_id in sources_used:
+                    if source_id in source_groups:
+                        source_name = file_registry.get(source_id, source_id)
+                        chunks_text = "\n".join(source_groups[source_id])
+                        context_parts.append(f"[From {source_name}]\n{chunks_text}")
+                
+                context = "\n\n---\n\n".join(context_parts)
+            else:
+                # Single source: simple concatenation
+                context = "\n\n".join(context_chunks)
         else:
             context = "No relevant context found."
             source_names = []

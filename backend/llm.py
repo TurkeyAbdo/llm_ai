@@ -69,15 +69,22 @@ class LLMModel:
         temperature: float = 0.7
     ) -> str:
         """Generate a response using Llama-3-style prompt formatting."""
-        system_prompt = "You are a helpful assistant that answers questions based on the provided context."
+        system_prompt = "You are a helpful assistant that answers questions based on the provided context. Provide a clear, concise, and well-synthesized answer that integrates information from the context."
         
-        # Proper Llama-3.2 Chat Template formatting
+        # Truncate context if too long (keep first part which is usually more relevant)
+        max_context_length = 2500  # characters
+        if len(context) > max_context_length:
+            # Keep the beginning which typically has the most relevant information
+            context = context[:max_context_length] + "...[truncated for length]..."
+        
+        # Proper Llama-3.1 Chat Template formatting
         prompt = (
             f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
             f"{system_prompt}<|eot_id|>"
             f"<|start_header_id|>user<|end_header_id|>\n\n"
             f"Context:\n{context}\n\n"
-            f"Question: {user_message}<|eot_id|>"
+            f"Question: {user_message}\n\n"
+            f"Please provide a synthesized answer based on the context above.<|eot_id|>"
             f"<|start_header_id|>assistant<|end_header_id|>\n\n"
         )
         
@@ -92,11 +99,21 @@ class LLMModel:
                 do_sample=True,
                 top_p=0.9,
                 pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
+                eos_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=1.1  # Reduce repetition
             )
         
         # Only decode the new tokens generated
         generated_tokens = outputs[0][inputs['input_ids'].shape[-1]:]
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         
-        return response.strip()
+        # Clean up response
+        response = response.strip()
+        
+        # Fix potential encoding issues for Arabic/Unicode
+        try:
+            response = response.encode('utf-8').decode('utf-8')
+        except:
+            pass
+        
+        return response
